@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 
 	"github.com/google/subcommands"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -36,21 +37,21 @@ func boolPtr(b bool) *bool    { return &b }
 type Update struct {
 	resources string
 
-	cpuPeriod    uint64
-	cpuQuota     int64
-	cpuBurst     uint64
-	cpuShares    uint64
-	cpuRtPeriod  uint64
-	cpuRtRuntime int64
-	cpusetCpus   string // can this be string or this has to be list of smth?
-	cpusetMems   string
-	cpuIdle      int64
-
-	memory            int64
-	memoryReservation int64
-	memorySwap        int64
-
 	blkioWeight int
+
+	cpuBurst     string
+	cpuIdle      string
+	cpuPeriod    string
+	cpuQuota     string
+	cpuRtPeriod  string
+	cpuRtRuntime string
+	cpuShares    string
+	cpusetCpus   string
+	cpusetMems   string
+
+	memory            string
+	memoryReservation string
+	memorySwap        string
 
 	pidsLimit int64
 
@@ -109,21 +110,21 @@ Note: if data is to be read from a file or the standard input, all
 other options are ignored.
 `)
 
-	f.Uint64Var(&u.cpuPeriod, "cpu-period", 0, "CPU CFS period to be used for hardcapping (in usecs). 0 to use system default")
-	f.Int64Var(&u.cpuQuota, "cpu-quota", 0, "CPU CFS hardcap limit (in usecs). Allowed cpu time in a given period")
-	f.Uint64Var(&u.cpuBurst, "cpu-burst", 0, "CPU CFS hardcap burst limit (in usecs). Allowed accumulated cpu time additionally for burst a given period")
-	f.Uint64Var(&u.cpuShares, "cpu-share", 0, "CPU shares (relative weight vs. other containers)")
-	f.Uint64Var(&u.cpuRtPeriod, "cpu-rt-period", 0, "CPU realtime period to be used for hardcapping (in usecs). 0 to use system default")
-	f.Int64Var(&u.cpuRtRuntime, "cpu-rt-runtime", 0, "CPU realtime hardcap limit (in usecs). Allowed cpu time in a given period")
+	f.IntVar(&u.blkioWeight, "blkio-weight", 0, "Specifies per cgroup weight, range is from 10 to 1000")
+
+	f.StringVar(&u.cpuBurst, "cpu-burst", "", "CPU CFS hardcap burst limit (in usecs). Allowed accumulated cpu time additionally for burst a given period")
+	f.StringVar(&u.cpuIdle, "cpu-idle", "", "set cgroup SCHED_IDLE or not, 0: default behavior, 1: SCHED_IDLE")
+	f.StringVar(&u.cpuPeriod, "cpu-period", "", "CPU CFS period to be used for hardcapping (in usecs). 0 to use system default")
+	f.StringVar(&u.cpuQuota, "cpu-quota", "", "CPU CFS hardcap limit (in usecs). Allowed cpu time in a given period")
+	f.StringVar(&u.cpuRtPeriod, "cpu-rt-period", "", "CPU realtime period to be used for hardcapping (in usecs). 0 to use system default")
+	f.StringVar(&u.cpuRtRuntime, "cpu-rt-runtime", "", "CPU realtime hardcap limit (in usecs). Allowed cpu time in a given period")
+	f.StringVar(&u.cpuShares, "cpu-share", "", "CPU shares (relative weight vs. other containers)")
 	f.StringVar(&u.cpusetCpus, "cpuset-cpus", "", "CPU(s) to use")
 	f.StringVar(&u.cpusetMems, "cpuset-mems", "", "Memory node(s) to use")
-	f.Int64Var(&u.cpuIdle, "cpu-idle", 0, "set cgroup SCHED_IDLE or not, 0: default behavior, 1: SCHED_IDLE")
 
-	f.Int64Var(&u.memory, "memory", 0, "Memory limit (in bytes)")
-	f.Int64Var(&u.memoryReservation, "memory-reservation", 0, "Memory reservation or soft_limit (in bytes)")
-	f.Int64Var(&u.memorySwap, "memory-swap", 0, "Total memory usage (memory + swap); set '-1' to enable unlimited swap")
-
-	f.IntVar(&u.blkioWeight, "blkio-weight", 0, "Specifies per cgroup weight, range is from 10 to 1000")
+	f.StringVar(&u.memory, "memory", "", "Memory limit (in bytes)")
+	f.StringVar(&u.memoryReservation, "memory-reservation", "", "Memory reservation or soft_limit (in bytes)")
+	f.StringVar(&u.memorySwap, "memory-swap", "", "Total memory usage (memory + swap); set '-1' to enable unlimited swap")
 
 	f.Int64Var(&u.pidsLimit, "pids-limit", 0, "Maximum number of pids allowed in the container")
 
@@ -148,29 +149,12 @@ func (u *Update) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcom
 
 	r := specs.LinuxResources{
 		Memory: &specs.LinuxMemory{
-			Limit:             i64Ptr(0),
-			Reservation:       i64Ptr(0),
-			Swap:              i64Ptr(0),
 			CheckBeforeUpdate: boolPtr(false),
 		},
-		CPU: &specs.LinuxCPU{
-			Shares:          u64Ptr(0),
-			Quota:           i64Ptr(0),
-			Burst:           u64Ptr(0),
-			Period:          u64Ptr(0),
-			RealtimeRuntime: i64Ptr(0),
-			RealtimePeriod:  u64Ptr(0),
-			Cpus:            "",
-			Mems:            "",
-		},
-		BlockIO: &specs.LinuxBlockIO{
-			Weight: u16Ptr(0),
-		},
-		Pids: &specs.LinuxPids{
-			Limit: 0,
-		},
+		CPU:     &specs.LinuxCPU{},
+		BlockIO: &specs.LinuxBlockIO{},
+		Pids:    nil,
 	}
-
 	if in := u.resources; in != "" {
 		var (
 			f   *os.File
@@ -180,36 +164,131 @@ func (u *Update) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcom
 		case "-":
 			f = os.Stdin
 		default:
-			f, err = os.Open(in)
-			if err != nil {
+			if f, err = os.Open(in); err != nil {
 				return util.Errorf("opening %q: %v", in, err)
 			}
 			defer f.Close()
 		}
-		err = json.NewDecoder(f).Decode(&r)
-		if err != nil {
+		if err := json.NewDecoder(f).Decode(&r); err != nil {
 			return util.Errorf("decoding %q: %v", in, err)
 		}
 	} else {
-		r.Memory.Limit = i64Ptr(u.memory)
-		r.Memory.Reservation = i64Ptr(u.memoryReservation)
-		r.Memory.Swap = i64Ptr(u.memorySwap)
+		if u.l3CacheSchema != "" || u.memBwSchema != "" {
+			return util.Errorf("Intel RDT support is not yet implemented")
+		}
 
-		r.CPU.Shares = u64Ptr(u.cpuShares)
-		r.CPU.Quota = i64Ptr(u.cpuQuota)
-		r.CPU.Burst = u64Ptr(u.cpuBurst)
-		r.CPU.Period = u64Ptr(u.cpuPeriod)
-		r.CPU.RealtimeRuntime = i64Ptr(u.cpuRtRuntime)
-		r.CPU.RealtimePeriod = u64Ptr(u.cpuRtPeriod)
+		if u.blkioWeight != 0 {
+			r.BlockIO.Weight = u16Ptr(uint16(u.blkioWeight))
+		}
+
 		r.CPU.Cpus = u.cpusetCpus
 		r.CPU.Mems = u.cpusetMems
 
-		r.BlockIO.Weight = u16Ptr(uint16(u.blkioWeight))
+		for _, pair := range []struct {
+			strval string
+			dest   **uint64
+		}{
+			{u.cpuBurst, &r.CPU.Burst},
+			{u.cpuPeriod, &r.CPU.Period},
+			{u.cpuRtPeriod, &r.CPU.RealtimePeriod},
+			{u.cpuShares, &r.CPU.Shares},
+		} {
+			if pair.strval == "" {
+				continue
+			}
+			v, err := strconv.ParseUint(pair.strval, 10, 64)
+			if err != nil {
+				return util.Errorf("invalid value for %s: %v", pair.strval, err)
+			}
+			*pair.dest = &v
+		}
 
-		r.Pids.Limit = u.pidsLimit
+		for _, pair := range []struct {
+			strval string
+			dest   **int64
+		}{
+			{u.cpuIdle, &r.CPU.Idle},
+			{u.cpuQuota, &r.CPU.Quota},
+			{u.cpuRtRuntime, &r.CPU.RealtimeRuntime},
+		} {
+			if pair.strval == "" {
+				continue
+			}
+			v, err := strconv.ParseInt(pair.strval, 10, 64)
+			if err != nil {
+				return util.Errorf("invalid value for %s: %v", pair.strval, err)
+			}
+			*pair.dest = &v
+		}
+
+		for _, pair := range []struct {
+			strval string
+			dest   **int64
+		}{
+			{u.memory, &r.Memory.Limit},
+			{u.memoryReservation, &r.Memory.Reservation},
+			{u.memorySwap, &r.Memory.Swap},
+		} {
+			if pair.strval == "" {
+				continue
+			}
+			v, err := strconv.ParseInt(pair.strval, 10, 64)
+			if err != nil {
+				return util.Errorf("invalid value for %s: %v", pair.strval, err)
+			}
+			*pair.dest = &v
+		}
+
+		if u.pidsLimit > 0 {
+			r.Pids = &specs.LinuxPids{Limit: u.pidsLimit}
+		}
 	}
 
-	if err = c.Set(&r); err != nil {
+	prev := c.Spec.Linux.Resources
+	// Retain existing values if not set
+	if prev.CPU != nil {
+		if r.CPU.Burst == nil {
+			r.CPU.Burst = prev.CPU.Burst
+		}
+		if r.CPU.Idle == nil {
+			r.CPU.Idle = prev.CPU.Idle
+		}
+		if r.CPU.Period == nil {
+			r.CPU.Period = prev.CPU.Period
+		}
+		if r.CPU.Quota == nil {
+			r.CPU.Quota = prev.CPU.Quota
+		}
+		if r.CPU.RealtimePeriod == nil {
+			r.CPU.RealtimePeriod = prev.CPU.RealtimePeriod
+		}
+		if r.CPU.RealtimeRuntime == nil {
+			r.CPU.RealtimeRuntime = prev.CPU.RealtimeRuntime
+		}
+		if r.CPU.Shares == nil {
+			r.CPU.Shares = prev.CPU.Shares
+		}
+	}
+
+	if prev.Memory != nil {
+		if r.Memory.Limit == nil {
+			r.Memory.Limit = prev.Memory.Limit
+		}
+		if r.Memory.Reservation == nil {
+			r.Memory.Reservation = prev.Memory.Reservation
+		}
+		if r.Memory.Swap == nil {
+			r.Memory.Swap = prev.Memory.Swap
+		}
+	}
+
+	if prev.BlockIO != nil {
+		if r.BlockIO.Weight == nil {
+			r.BlockIO.Weight = prev.BlockIO.Weight
+		}
+	}
+
+	if err := c.Set(&r); err != nil {
 		return util.Errorf("setting resources: %v", err)
 	}
 

@@ -149,6 +149,37 @@ func (c *cgroupV2) Install(res *specs.LinuxResources) error {
 	return nil
 }
 
+// Set sets the cgroup resources.
+func (c *cgroupV2) Set(res *specs.LinuxResources) error {
+	log.Debugf("Setting cgroup resources for %q", c.MakePath(""))
+	for controllerName, ctrlr := range controllers2 {
+		// First check if our controller is found in the system.
+		found := false
+		for _, knownController := range c.Controllers {
+			if controllerName == knownController {
+				found = true
+				break
+			}
+		}
+
+		// In case we don't have the controller.
+		if found {
+			if err := ctrlr.set(res, c.MakePath("")); err != nil {
+				return err
+			}
+			continue
+		}
+		if ctrlr.optional() {
+			if err := ctrlr.skip(res); err != nil {
+				return err
+			}
+		} else {
+			return fmt.Errorf("mandatory cgroup controller %q is missing for %q", controllerName, c.MakePath(""))
+		}
+	}
+	return nil
+}
+
 // Uninstall removes the settings done in Install(). If cgroup path already
 // existed when Install() was called, Uninstall is a noop.
 func (c *cgroupV2) Uninstall() error {
@@ -209,36 +240,6 @@ func (c *cgroupV2) Join() (func(), error) {
 	}
 
 	return cu.Release(), nil
-}
-
-// Set sets the cgroup resources.
-func (c *cgroupV2) Set(res *specs.LinuxResources) error {
-	for controllerName, ctrlr := range controllers2 {
-		// First check if our controller is found in the system.
-		found := false
-		for _, knownController := range c.Controllers {
-			if controllerName == knownController {
-				found = true
-				break
-			}
-		}
-
-		// In case we don't have the controller.
-		if found {
-			if err := ctrlr.set(res, c.MakePath("")); err != nil {
-				return err
-			}
-			continue
-		}
-		if ctrlr.optional() {
-			if err := ctrlr.skip(res); err != nil {
-				return err
-			}
-		} else {
-			return fmt.Errorf("mandatory cgroup controller %q is missing for %q", controllerName, c.MakePath(""))
-		}
-	}
-	return nil
 }
 
 func getCPUQuota(path string) (float64, error) {
@@ -535,11 +536,15 @@ func (*memory2) generateProperties(spec *specs.LinuxResources) ([]dbus.Property,
 }
 
 func (*memory2) set(spec *specs.LinuxResources, path string) error {
+	log.Debugf("spec: %v", spec)
 	if spec == nil || spec.Memory == nil {
 		return nil
 	}
 
+	log.Debugf("nil: %v", spec.Memory.Swap == nil)
+
 	if spec.Memory.Swap != nil {
+		log.Debugf("swap: %v", *spec.Memory.Swap)
 		// in cgroup v2, we set memory and swap separately, but the spec specifies
 		// Swap field as memory+swap, so we need memory limit here to be set in
 		// order to get the correct swap value.
@@ -551,7 +556,9 @@ func (*memory2) set(spec *specs.LinuxResources, path string) error {
 		if err != nil {
 			return nil
 		}
+		log.Debugf("swap: %v", swap)
 		swapStr := numToStr(swap)
+		log.Debugf("swapStr: %v", swapStr)
 		// memory and memorySwap set to the same value -- disable swap
 		if swapStr == "" && swap == 0 && *spec.Memory.Swap > 0 {
 			swapStr = "0"

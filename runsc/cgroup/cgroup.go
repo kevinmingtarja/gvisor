@@ -316,9 +316,9 @@ func loadPathsHelper(cgroup, mountinfo io.Reader, unified bool) (map[string]stri
 // Cgroup represents a cgroup configuration.
 type Cgroup interface {
 	Install(res *specs.LinuxResources) error
+	Set(res *specs.LinuxResources) error
 	Uninstall() error
 	Join() (func(), error)
-	Set(res *specs.LinuxResources) error
 	CPUQuota() (float64, error)
 	CPUUsage() (uint64, error)
 	NumCPU() (int, error)
@@ -543,6 +543,33 @@ func (c *cgroupV1) Install(res *specs.LinuxResources) error {
 	return nil
 }
 
+// Set configures cgroups according to 'res'. Unlike Install(),
+// we always update the cgroup resources, even if the cgroup
+// path already exists.
+func (c *cgroupV1) Set(res *specs.LinuxResources) error {
+	log.Debugf("Setting cgroup resources for %q", c.Name)
+	for key, ctrlr := range controllers {
+		path := c.MakePath(key)
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) && ctrlr.optional() {
+				if err := ctrlr.skip(res); err != nil {
+					return err
+				}
+				log.Infof("Skipping cgroup %q, path doesn't exist", key)
+				continue
+			} else if err != nil {
+				return fmt.Errorf("failed to stat cgroup %q: %w", key, err)
+			}
+		}
+
+		if err := ctrlr.set(res, path); err != nil {
+			return fmt.Errorf("failed to set %q cgroup: %w", key, err)
+		}
+	}
+
+	return nil
+}
+
 // createController creates the controller directory, checking that the
 // controller is enabled in the system. It returns a boolean indicating whether
 // the controller should be skipped (e.g. controller is disabled). In case it
@@ -642,37 +669,6 @@ func (c *cgroupV1) Join() (func(), error) {
 		}
 	}
 	return cu.Release(), nil
-}
-
-// Set configures cgroups according to 'res'. Unlike Install(),
-// we always update the cgroup resources, even if the cgroup
-// path already exists.
-func (c *cgroupV1) Set(res *specs.LinuxResources) error {
-	log.Debugf("Setting cgroup resources for %q", c.Name)
-	if res == nil {
-		return nil
-	}
-
-	for key, ctrlr := range controllers {
-		path := c.MakePath(key)
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) && ctrlr.optional() {
-				if err := ctrlr.skip(res); err != nil {
-					return err
-				}
-				log.Infof("Skipping cgroup %q, path doesn't exist", key)
-				continue
-			} else if err != nil {
-				return fmt.Errorf("failed to stat cgroup %q: %w", key, err)
-			}
-		}
-
-		if err := ctrlr.set(res, path); err != nil {
-			return fmt.Errorf("failed to set %q cgroup: %w", key, err)
-		}
-	}
-
-	return nil
 }
 
 // CPUQuota returns the CFS CPU quota.
