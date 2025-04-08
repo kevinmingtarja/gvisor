@@ -536,15 +536,11 @@ func (*memory2) generateProperties(spec *specs.LinuxResources) ([]dbus.Property,
 }
 
 func (*memory2) set(spec *specs.LinuxResources, path string) error {
-	log.Debugf("spec: %v", spec)
 	if spec == nil || spec.Memory == nil {
 		return nil
 	}
 
-	log.Debugf("nil: %v", spec.Memory.Swap == nil)
-
 	if spec.Memory.Swap != nil {
-		log.Debugf("swap: %v", *spec.Memory.Swap)
 		// in cgroup v2, we set memory and swap separately, but the spec specifies
 		// Swap field as memory+swap, so we need memory limit here to be set in
 		// order to get the correct swap value.
@@ -554,11 +550,9 @@ func (*memory2) set(spec *specs.LinuxResources, path string) error {
 
 		swap, err := convertMemorySwapToCgroupV2Value(*spec.Memory.Swap, *spec.Memory.Limit)
 		if err != nil {
-			return nil
+			return err
 		}
-		log.Debugf("swap: %v", swap)
 		swapStr := numToStr(swap)
-		log.Debugf("swapStr: %v", swapStr)
 		// memory and memorySwap set to the same value -- disable swap
 		if swapStr == "" && swap == 0 && *spec.Memory.Swap > 0 {
 			swapStr = "0"
