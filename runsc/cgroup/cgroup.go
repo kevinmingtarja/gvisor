@@ -543,12 +543,14 @@ func (c *cgroupV1) Install(res *specs.LinuxResources) error {
 	return nil
 }
 
-// Set configures cgroups according to 'res'. Unlike Install(),
-// we always update the cgroup resources, even if the cgroup
-// path already exists.
+// Set sets the cgroup resources.
 func (c *cgroupV1) Set(res *specs.LinuxResources) error {
 	log.Debugf("Setting cgroup resources for %q", c.Name)
 	for key, ctrlr := range controllers {
+		if !c.Own[key] {
+			// cgroup is managed by caller, don't touch it.
+			continue
+		}
 		path := c.MakePath(key)
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) && ctrlr.optional() {
